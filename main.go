@@ -156,7 +156,8 @@ func scanChanges(watchPath string, cb scanCallback) {
 				return nil
 			}
 
-			if filepath.Ext(path) == ".go" && info.ModTime().After(startTime) {
+			ext := filepath.Ext(path)
+			if ext == ".go" || ext == ".html" && info.ModTime().After(startTime) {
 				cb(path)
 				startTime = time.Now()
 				return errors.New("done")
