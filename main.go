@@ -22,6 +22,7 @@ var (
 	logger     = log.New(os.Stdout, "[gin] ", 0)
 	immediate  = false
 	excluded   = []string{}
+	filetypes  = []string{}
 	buildError error
 )
 
@@ -50,6 +51,11 @@ func main() {
 			Name:  "exclude,ex",
 			Value: &cli.StringSlice{".git", "bower_components"},
 			Usage: "files and directories to ignore",
+		},
+		cli.StringSliceFlag{
+			Name:  "filetype,ft",
+			Value: &cli.StringSlice{"go", "html"},
+			Usage: "filetypes to watch and recompile on",
 		},
 		cli.StringFlag{
 			Name:  "path,t",
@@ -88,6 +94,7 @@ func MainAction(c *cli.Context) {
 	appPort := strconv.Itoa(c.GlobalInt("appPort"))
 	immediate = c.GlobalBool("immediate")
 	excluded = c.GlobalStringSlice("exclude")
+	filetypes = c.GlobalStringSlice("filetype")
 
 	// Bootstrap the environment
 	envy.Bootstrap()
@@ -177,7 +184,7 @@ func scanChanges(watchPath string, cb scanCallback) {
 			}
 
 			ext := filepath.Ext(path)
-			if (ext == ".go" || ext == ".html") && info.ModTime().After(startTime) {
+			if validExt(ext) && info.ModTime().After(startTime) {
 				cb(path)
 				startTime = time.Now()
 				return errors.New("done")
@@ -187,6 +194,15 @@ func scanChanges(watchPath string, cb scanCallback) {
 		})
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+func validExt(ext string) bool {
+	for _, ft := range filetypes {
+		if ext == "."+ft {
+			return true
+		}
+	}
+	return false
 }
 
 func inExcluded(path string) bool {
