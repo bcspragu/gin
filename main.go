@@ -21,6 +21,7 @@ var (
 	startTime  = time.Now()
 	logger     = log.New(os.Stdout, "[gin] ", 0)
 	immediate  = false
+	excluded   = []string{}
 	buildError error
 )
 
@@ -44,6 +45,11 @@ func main() {
 			Name:  "bin,b",
 			Value: "gin-bin",
 			Usage: "name of generated binary file",
+		},
+		cli.StringSliceFlag{
+			Name:  "exclude,ex",
+			Value: &cli.StringSlice{".git", "bower_components"},
+			Usage: "files and directories to ignore",
 		},
 		cli.StringFlag{
 			Name:  "path,t",
@@ -81,6 +87,7 @@ func MainAction(c *cli.Context) {
 	port := c.GlobalInt("port")
 	appPort := strconv.Itoa(c.GlobalInt("appPort"))
 	immediate = c.GlobalBool("immediate")
+	excluded = c.GlobalStringSlice("exclude")
 
 	// Bootstrap the environment
 	envy.Bootstrap()
@@ -160,7 +167,7 @@ type scanCallback func(path string)
 func scanChanges(watchPath string, cb scanCallback) {
 	for {
 		filepath.Walk(watchPath, func(path string, info os.FileInfo, err error) error {
-			if path == ".git" {
+			if inExcluded(path) {
 				return filepath.SkipDir
 			}
 
@@ -180,6 +187,15 @@ func scanChanges(watchPath string, cb scanCallback) {
 		})
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+func inExcluded(path string) bool {
+	for _, x := range excluded {
+		if path == x {
+			return true
+		}
+	}
+	return false
 }
 
 func shutdown(runner gin.Runner) {
