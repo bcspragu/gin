@@ -4,9 +4,10 @@ import (
 	"errors"
 	"fmt"
 
-	"gopkg.in/urfave/cli.v1"
+	gin "github.com/bcspragu/gin/lib"
 	"github.com/codegangsta/envy/lib"
-	"github.com/codegangsta/gin/lib"
+	shellwords "github.com/mattn/go-shellwords"
+	"gopkg.in/urfave/cli.v1"
 
 	"log"
 	"os"
@@ -21,7 +22,6 @@ var (
 	startTime  = time.Now()
 	logger     = log.New(os.Stdout, "[gin] ", 0)
 	immediate  = false
-	excluded   = []string{}
 	filetypes  = []string{}
 	buildError error
 	colorGreen = string([]byte{27, 91, 57, 55, 59, 51, 50, 59, 49, 109})
@@ -56,11 +56,6 @@ func main() {
 			Usage: "name of generated binary file",
 		},
 		cli.StringSliceFlag{
-			Name:  "exclude,ex",
-			Value: &cli.StringSlice{".git", "bower_components"},
-			Usage: "files and directories to ignore",
-		},
-		cli.StringSliceFlag{
 			Name:  "filetype,ft",
 			Value: &cli.StringSlice{"go", "html"},
 			Usage: "filetypes to watch and recompile on",
@@ -69,6 +64,11 @@ func main() {
 			Name:  "path,t",
 			Value: ".",
 			Usage: "Path to watch files from",
+		},
+		cli.StringFlag{
+			Name:  "build,d",
+			Value: "",
+			Usage: "Path to build files from (defaults to same value as --path)",
 		},
 		cli.StringSliceFlag{
 			Name:  "excludeDir,x",
@@ -80,8 +80,24 @@ func main() {
 			Usage: "run the server immediately after it's built",
 		},
 		cli.BoolFlag{
+			Name:  "all",
+			Usage: "reloads whenever any file changes, as opposed to reloading only on .go file change",
+		},
+		cli.BoolFlag{
 			Name:  "godep,g",
 			Usage: "use godep when building",
+		},
+		cli.StringFlag{
+			Name:  "buildArgs",
+			Usage: "Additional go build arguments",
+		},
+		cli.StringFlag{
+			Name:  "certFile",
+			Usage: "TLS Certificate",
+		},
+		cli.StringFlag{
+			Name:  "keyFile",
+			Usage: "TLS Certificate Key",
 		},
 	}
 	app.Commands = []cli.Command{
@@ -105,10 +121,12 @@ func main() {
 func MainAction(c *cli.Context) {
 	laddr := c.GlobalString("laddr")
 	port := c.GlobalInt("port")
+	all := c.GlobalBool("all")
 	appPort := strconv.Itoa(c.GlobalInt("appPort"))
 	immediate = c.GlobalBool("immediate")
-	excluded = c.GlobalStringSlice("exclude")
 	filetypes = c.GlobalStringSlice("filetype")
+	keyFile := c.GlobalString("keyFile")
+	certFile := c.GlobalString("certFile")
 
 	// Bootstrap the environment
 	envy.Bootstrap()
@@ -121,15 +139,26 @@ func MainAction(c *cli.Context) {
 		logger.Fatal(err)
 	}
 
-	builder := gin.NewBuilder(c.GlobalString("path"), c.GlobalString("bin"), c.GlobalBool("godep"), wd)
+	buildArgs, err := shellwords.Parse(c.GlobalString("buildArgs"))
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	buildPath := c.GlobalString("build")
+	if buildPath == "" {
+		buildPath = c.GlobalString("path")
+	}
+	builder := gin.NewBuilder(buildPath, c.GlobalString("bin"), c.GlobalBool("godep"), wd, buildArgs)
 	runner := gin.NewRunner(filepath.Join(wd, builder.Binary()), c.Args()...)
 	runner.SetWriter(os.Stdout)
 	proxy := gin.NewProxy(builder, runner)
 
 	config := &gin.Config{
-		Laddr:   laddr,
-		Port:    port,
-		ProxyTo: "http://localhost:" + appPort,
+		Laddr:    laddr,
+		Port:     port,
+		ProxyTo:  "http://localhost:" + appPort,
+		KeyFile:  keyFile,
+		CertFile: certFile,
 	}
 
 	err = proxy.Run(config)
@@ -149,7 +178,7 @@ func MainAction(c *cli.Context) {
 	build(builder, runner, logger)
 
 	// scan for changes
-	scanChanges(c.GlobalString("path"), c.GlobalStringSlice("excludeDir"), func(path string) {
+	scanChanges(c.GlobalString("path"), c.GlobalStringSlice("excludeDir"), all, func(path string) {
 		runner.Kill()
 		build(builder, runner, logger)
 	})
@@ -190,10 +219,10 @@ func build(builder gin.Builder, runner gin.Runner, logger *log.Logger) {
 
 type scanCallback func(path string)
 
-func scanChanges(watchPath string, excludeDirs []string, cb scanCallback) {
+func scanChanges(watchPath string, excludeDirs []string, allFiles bool, cb scanCallback) {
 	for {
 		filepath.Walk(watchPath, func(path string, info os.FileInfo, err error) error {
-			if inExcluded(path) {
+			if path == ".git" && info.IsDir() {
 				return filepath.SkipDir
 			}
 			for _, x := range excludeDirs {
@@ -208,7 +237,7 @@ func scanChanges(watchPath string, excludeDirs []string, cb scanCallback) {
 			}
 
 			ext := filepath.Ext(path)
-			if validExt(ext) && info.ModTime().After(startTime) {
+			if (allFiles || validExt(ext)) && info.ModTime().After(startTime) {
 				cb(path)
 				startTime = time.Now()
 				return errors.New("done")
@@ -223,15 +252,6 @@ func scanChanges(watchPath string, excludeDirs []string, cb scanCallback) {
 func validExt(ext string) bool {
 	for _, ft := range filetypes {
 		if ext == "."+ft {
-			return true
-		}
-	}
-	return false
-}
-
-func inExcluded(path string) bool {
-	for _, x := range excluded {
-		if path == x {
 			return true
 		}
 	}
